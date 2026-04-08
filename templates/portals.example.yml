@@ -7,6 +7,8 @@
 #   3. WebSearch with site: filters (broad discovery, may be stale)
 #
 # IMPORTANT: Each company in tracked_companies MUST have careers_url.
+# Avoid generic news/portal homepages here. Prefer real careers pages, Greenhouse APIs,
+# Ashby/Lever boards, or targeted search queries. Generic portals often produce false positives.
 #
 # HOW TO CUSTOMIZE:
 #   1. Copy this file to portals.yml in the project root

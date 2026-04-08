@@ -102,6 +102,56 @@ function matchesTitleFilter(title, titleFilter) {
   };
 }
 
+const NON_JOB_TITLE_PATTERNS = [
+  /monitor de ofertas/i,
+  /\b\d+%\s*off\b/i,
+  /\bcupom\b/i,
+  /\bpromo[cç][aã]o\b/i,
+  /\bfrete gr[aá]tis\b/i,
+  /\bcronograma capilar\b/i,
+  /\bcamisetas?\b/i,
+  /\bblack friday\b/i,
+  /\bguia de compras\b/i,
+  /\bnot[ií]cias?\b/i,
+  /\bflash\b/i,
+];
+
+const JOB_SIGNAL_PATTERNS = [
+  /\bsoftware engineer\b/i,
+  /\bbackend engineer\b/i,
+  /\bjava developer\b/i,
+  /\bdesenvolvedor(?:a)?\b/i,
+  /\bengenheir(?:o|a) de software\b/i,
+  /\bvaga\b/i,
+  /\bopportunit(?:y|ies)\b/i,
+  /\bjob\b/i,
+  /\bposition\b/i,
+  /\brole\b/i,
+];
+
+function passesJobSanityCheck(job) {
+  const title = String(job.title || '').trim();
+  const url = String(job.url || '').trim();
+
+  if (!title || !url) {
+    return { ok: false, reason: 'empty_title_or_url' };
+  }
+
+  if (NON_JOB_TITLE_PATTERNS.some((pattern) => pattern.test(title))) {
+    return { ok: false, reason: 'non_job_title_pattern' };
+  }
+
+  if (/uol\.com\.br\/flash\//i.test(url)) {
+    return { ok: false, reason: 'non_job_url_pattern' };
+  }
+
+  if (!JOB_SIGNAL_PATTERNS.some((pattern) => pattern.test(title))) {
+    return { ok: false, reason: 'missing_job_signal' };
+  }
+
+  return { ok: true, reason: '' };
+}
+
 function inferCompanyFromUrl(url) {
   try {
     const parsed = new URL(url);
@@ -323,6 +373,13 @@ async function main() {
 
       for (const job of jobs) {
         discovered += 1;
+        const sanity = passesJobSanityCheck(job);
+        if (!sanity.ok) {
+          skippedTitles.push(`${job.title} [${job.company}] <- ${job.source} (${sanity.reason})`);
+          historyRows.push([job.url, today, job.source, job.title, job.company, 'skipped_non_job'].join('\t'));
+          continue;
+        }
+
         const match = matchesTitleFilter(job.title, portals.title_filter);
 
         if (!match.ok) {
@@ -365,6 +422,13 @@ async function main() {
 
       for (const job of jobs) {
         discovered += 1;
+        const sanity = passesJobSanityCheck(job);
+        if (!sanity.ok) {
+          skippedTitles.push(`${job.title} [${job.company}] <- ${query.name} (${sanity.reason})`);
+          historyRows.push([job.url, today, query.name, job.title, job.company, 'skipped_non_job'].join('\t'));
+          continue;
+        }
+
         const match = matchesTitleFilter(job.title, portals.title_filter);
 
         if (!match.ok) {
