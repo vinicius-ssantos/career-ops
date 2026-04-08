@@ -16,11 +16,16 @@ jds/*
 !jds/.gitkeep
 
 # User config and customization (never auto-updated)
+cv.md
 config/profile.yml
 portals.yml
 modes/_profile.md
 .update-dismissed
 .update-lock
+
+# Personal source files
+curriculo_*.pdf
+.idea/
 
 # Generated
 .resolved-prompt-*

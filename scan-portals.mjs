@@ -1,31 +1,20 @@
 #!/usr/bin/env node
 
 /**
- * scan-portals.mjs — local tracked-company scan
+ * scan-portals.mjs — local portal scanner
  *
  * Scope:
- * - Reads tracked companies from portals.yml
+ * - Reads tracked companies and search queries from portals.yml
  * - Supports Greenhouse APIs directly
- * - Falls back to Playwright careers page extraction
+ * - Falls back to Playwright careers page extraction for tracked companies
+ * - Supports broad discovery through simple web search over search_queries
  * - Writes new URLs to data/pipeline.md and data/scan-history.tsv
- *
- * This intentionally avoids depending on agent-native WebSearch/WebFetch.
  */
 
 import { chromium } from 'playwright';
 import { existsSync } from 'fs';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
-
-function slugify(text) {
-  return text
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^\w\s-]/g, '')
-    .trim()
-    .replace(/[\s_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
 
 function parseScalar(raw) {
   const value = raw.trim();
@@ -43,13 +32,14 @@ function parseScalar(raw) {
 function parsePortalsYml(content) {
   const result = {
     title_filter: { positive: [], negative: [], seniority_boost: [] },
+    search_queries: [],
     tracked_companies: [],
   };
 
   const lines = content.split(/\r?\n/);
   let section = '';
   let subsection = '';
-  let currentCompany = null;
+  let currentItem = null;
 
   for (const rawLine of lines) {
     const noComment = rawLine.replace(/\s+#.*$/, '');
@@ -58,7 +48,7 @@ function parsePortalsYml(content) {
     if (/^[A-Za-z_]+:/.test(noComment) && !noComment.startsWith(' ')) {
       section = noComment.split(':')[0].trim();
       subsection = '';
-      currentCompany = null;
+      currentItem = null;
       continue;
     }
 
@@ -75,20 +65,20 @@ function parsePortalsYml(content) {
       continue;
     }
 
-    if (section === 'tracked_companies') {
+    if (section === 'search_queries' || section === 'tracked_companies') {
       if (/^\s*-\s+name:/.test(noComment)) {
-        currentCompany = {
+        currentItem = {
           name: parseScalar(noComment.split(/:\s+/, 2)[1] || ''),
           enabled: true,
         };
-        result.tracked_companies.push(currentCompany);
+        result[section].push(currentItem);
         continue;
       }
 
-      if (currentCompany && /^\s{4}[A-Za-z_]+:/.test(noComment)) {
+      if (currentItem && /^\s{4}[A-Za-z_]+:/.test(noComment)) {
         const trimmed = noComment.trim();
         const [key, rest] = trimmed.split(/:\s+/, 2);
-        currentCompany[key] = parseScalar(rest || '');
+        currentItem[key] = parseScalar(rest || '');
       }
     }
   }
@@ -101,10 +91,83 @@ function matchesTitleFilter(title, titleFilter) {
   const positives = titleFilter.positive || [];
   const negatives = titleFilter.negative || [];
 
-  const positiveMatch = positives.length === 0 || positives.some((keyword) => lower.includes(String(keyword).toLowerCase()));
-  const negativeMatch = negatives.some((keyword) => lower.includes(String(keyword).toLowerCase()));
+  const positiveMatch =
+    positives.length === 0 ||
+    positives.some((keyword) => lower.includes(String(keyword).toLowerCase()));
+  const negativeKeyword = negatives.find((keyword) => lower.includes(String(keyword).toLowerCase()));
 
-  return positiveMatch && !negativeMatch;
+  return {
+    ok: positiveMatch && !negativeKeyword,
+    reason: positiveMatch ? `negative:${negativeKeyword || ''}` : 'missing_positive',
+  };
+}
+
+function inferCompanyFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    const parts = host.split('.');
+    const stem = parts.length >= 2 ? parts[parts.length - 2] : host;
+    return stem.replace(/[-_]/g, ' ');
+  } catch {
+    return 'Unknown';
+  }
+}
+
+function normalizeHtml(text) {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function decodeDuckDuckGoHref(href) {
+  try {
+    if (href.startsWith('//')) {
+      href = `https:${href}`;
+    }
+    if (href.startsWith('/')) {
+      href = `https://html.duckduckgo.com${href}`;
+    }
+
+    const parsed = new URL(href);
+    const uddg = parsed.searchParams.get('uddg');
+    return uddg ? decodeURIComponent(uddg) : href;
+  } catch {
+    return href;
+  }
+}
+
+async function searchJobs(queryName, query) {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, {
+    headers: {
+      'user-agent': 'Mozilla/5.0 career-ops scanner',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from search provider`);
+  }
+
+  const html = await response.text();
+  const matches = [...html.matchAll(/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
+
+  return matches.slice(0, 10).map((match) => {
+    const href = decodeDuckDuckGoHref(match[1]);
+    const title = normalizeHtml(match[2]);
+    return {
+      company: inferCompanyFromUrl(href),
+      title,
+      url: href,
+      source: queryName,
+    };
+  }).filter((job) => job.title && job.url.startsWith('http'));
 }
 
 async function loadSeenUrls(projectRoot) {
@@ -137,7 +200,7 @@ async function fetchGreenhouseJobs(company) {
     company: company.name,
     title: (job.title || '').trim(),
     url: job.absolute_url,
-    source: 'greenhouse_api',
+    source: `tracked:${company.name}:greenhouse_api`,
   })).filter((job) => job.title && job.url);
 }
 
@@ -151,7 +214,7 @@ async function scrapeCareersPage(browser, company) {
     await page.waitForTimeout(2000);
 
     const jobs = await page.evaluate((companyName) => {
-      const titleLike = /engineer|architect|developer|manager|specialist|consultant|scientist|lead|director|head|product|designer|analyst|operations|recruit/i;
+      const titleLike = /engineer|developer|software|backend|java|api|microservices|integration/i;
       const anchors = Array.from(document.querySelectorAll('a[href]'));
       const items = [];
 
@@ -165,7 +228,7 @@ async function scrapeCareersPage(browser, company) {
           company: companyName,
           title: text,
           url: href,
-          source: 'careers_page',
+          source: `tracked:${companyName}:careers_page`,
         });
       }
 
@@ -211,8 +274,9 @@ async function main() {
 
   const portals = parsePortalsYml(await readFile(portalsPath, 'utf8'));
   const companies = (portals.tracked_companies || []).filter((company) => company.enabled !== false);
+  const queries = (portals.search_queries || []).filter((query) => query.enabled !== false);
   const seen = await loadSeenUrls(projectRoot);
-  const browser = await chromium.launch({ headless: true });
+  let browser = null;
 
   let discovered = 0;
   let relevant = 0;
@@ -220,22 +284,36 @@ async function main() {
   let added = 0;
   const newJobs = [];
   const historyRows = [];
+  const skippedTitles = [];
+  const errors = [];
   const today = new Date().toISOString().slice(0, 10);
 
   try {
+    const needsBrowser = companies.some((company) => !company.api && company.careers_url);
+    if (needsBrowser) {
+      try {
+        browser = await chromium.launch({ headless: true });
+      } catch (err) {
+        errors.push(`browser_launch -> ${String(err.message).replace(/\s+/g, ' ').slice(0, 160)}`);
+      }
+    }
+
     for (const company of companies) {
       let jobs = [];
       try {
         if (company.api) {
           jobs = await fetchGreenhouseJobs(company);
-        } else if (company.careers_url) {
+        } else if (company.careers_url && browser) {
           jobs = await scrapeCareersPage(browser, company);
+        } else if (company.careers_url) {
+          throw new Error('browser unavailable for careers page scan');
         }
       } catch (err) {
+        errors.push(`tracked:${company.name} -> ${String(err.message).replace(/\s+/g, ' ')}`);
         historyRows.push([
           company.careers_url || company.api || company.name,
           today,
-          company.api ? 'greenhouse_api' : 'careers_page',
+          `tracked:${company.name}`,
           company.name,
           company.name,
           `error:${String(err.message).replace(/\s+/g, ' ').slice(0, 80)}`,
@@ -245,8 +323,10 @@ async function main() {
 
       for (const job of jobs) {
         discovered += 1;
+        const match = matchesTitleFilter(job.title, portals.title_filter);
 
-        if (!matchesTitleFilter(job.title, portals.title_filter)) {
+        if (!match.ok) {
+          skippedTitles.push(`${job.title} [${job.company}] <- ${job.source} (${match.reason})`);
           historyRows.push([job.url, today, job.source, job.title, job.company, 'skipped_title'].join('\t'));
           continue;
         }
@@ -265,8 +345,52 @@ async function main() {
         added += 1;
       }
     }
+
+    for (const query of queries) {
+      let jobs = [];
+      try {
+        jobs = await searchJobs(query.name, query.query);
+      } catch (err) {
+        errors.push(`query:${query.name} -> ${String(err.message).replace(/\s+/g, ' ')}`);
+        historyRows.push([
+          `query:${query.name}`,
+          today,
+          query.name,
+          query.query,
+          '',
+          `error:${String(err.message).replace(/\s+/g, ' ').slice(0, 80)}`,
+        ].join('\t'));
+        continue;
+      }
+
+      for (const job of jobs) {
+        discovered += 1;
+        const match = matchesTitleFilter(job.title, portals.title_filter);
+
+        if (!match.ok) {
+          skippedTitles.push(`${job.title} [${job.company}] <- ${query.name} (${match.reason})`);
+          historyRows.push([job.url, today, query.name, job.title, job.company, 'skipped_title'].join('\t'));
+          continue;
+        }
+
+        relevant += 1;
+
+        if (seen.has(job.url)) {
+          duplicates += 1;
+          historyRows.push([job.url, today, query.name, job.title, job.company, 'skipped_dup'].join('\t'));
+          continue;
+        }
+
+        seen.add(job.url);
+        newJobs.push({ ...job, source: query.name });
+        historyRows.push([job.url, today, query.name, job.title, job.company, 'added'].join('\t'));
+        added += 1;
+      }
+    }
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 
   if (newJobs.length > 0) {
@@ -277,15 +401,33 @@ async function main() {
   console.log(`Portal Scan - ${today}`);
   console.log('------------------------------');
   console.log(`Tracked companies scanned: ${companies.length}`);
+  console.log(`Search queries executed: ${queries.length}`);
   console.log(`Jobs discovered: ${discovered}`);
   console.log(`Relevant after title filter: ${relevant}`);
   console.log(`Duplicates skipped: ${duplicates}`);
   console.log(`New jobs added to pipeline: ${added}`);
 
+  if (errors.length > 0) {
+    console.log('');
+    console.log('Errors:');
+    for (const error of errors.slice(0, 10)) {
+      console.log(`! ${error}`);
+    }
+  }
+
+  if (skippedTitles.length > 0) {
+    console.log('');
+    console.log('Skipped by title filter:');
+    for (const title of skippedTitles.slice(0, 15)) {
+      console.log(`- ${title}`);
+    }
+  }
+
   if (newJobs.length > 0) {
     console.log('');
+    console.log('Added to pipeline:');
     for (const job of newJobs.slice(0, 20)) {
-      console.log(`+ ${job.company} | ${job.title}`);
+      console.log(`+ ${job.company} | ${job.title} <- ${job.source}`);
     }
   }
 }
