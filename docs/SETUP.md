@@ -2,9 +2,12 @@
 
 ## Prerequisites
 
-- [Claude Code](https://claude.ai/code) installed and configured
 - Node.js 18+ (for PDF generation and utility scripts)
 - (Optional) Go 1.21+ (for the dashboard TUI)
+- One supported agent surface:
+  - Codex (`AGENTS.md`)
+  - [Claude Code](https://claude.ai/code) (`CLAUDE.md`)
+  - OpenCode (`.opencode/commands/`)
 
 ## Quick Start (5 steps)
 
@@ -44,13 +47,15 @@ Edit `portals.yml`:
 
 ### 5. Start using
 
-Open Claude Code in this directory:
+Open your preferred agent in this directory:
 
 ```bash
-claude
+# Examples:
+# codex
+# claude
 ```
 
-Then paste a job offer URL or description. Career-ops will automatically evaluate it, generate a report, create a tailored PDF, and track it.
+Then paste a job offer URL or description. Career-ops will evaluate it, generate a report, create a tailored PDF, and track it. For Codex, the repository-native entrypoint is `AGENTS.md`.
 
 ## Available Commands
 
@@ -63,6 +68,13 @@ Then paste a job offer URL or description. Career-ops will automatically evaluat
 | Batch evaluate | `/career-ops batch` |
 | Check tracker status | `/career-ops tracker` |
 | Fill application form | `/career-ops apply` |
+
+Repository-native helpers:
+
+```bash
+npm run extract:jd -- <job-url>
+npm run scan:portals
+```
 
 ## Verify Setup
 

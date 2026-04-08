@@ -41,6 +41,25 @@ function checkDependencies() {
   };
 }
 
+function checkAgentGuides() {
+  const hasAgents = existsSync(join(projectRoot, 'AGENTS.md'));
+  const hasClaude = existsSync(join(projectRoot, 'CLAUDE.md'));
+
+  if (hasAgents && hasClaude) {
+    return { pass: true, label: 'Agent guides ready (AGENTS.md + CLAUDE.md)' };
+  }
+
+  if (hasAgents || hasClaude) {
+    return { pass: true, label: 'At least one agent guide is present' };
+  }
+
+  return {
+    pass: false,
+    label: 'No agent guide found',
+    fix: 'Expected AGENTS.md and/or CLAUDE.md in project root',
+  };
+}
+
 async function checkPlaywright() {
   try {
     const { chromium } = await import('playwright');
@@ -157,6 +176,7 @@ async function main() {
     checkNodeVersion(),
     checkDependencies(),
     await checkPlaywright(),
+    checkAgentGuides(),
     checkCv(),
     checkProfile(),
     checkPortals(),
@@ -186,7 +206,7 @@ async function main() {
     console.log(`Result: ${failures} issue${failures === 1 ? '' : 's'} found. Fix them and run \`npm run doctor\` again.`);
     process.exit(1);
   } else {
-    console.log('Result: All checks passed. You\'re ready to go! Run `claude` to start.');
+    console.log('Result: All checks passed. You\'re ready to go with Codex, Claude Code, or OpenCode.');
     process.exit(0);
   }
 }

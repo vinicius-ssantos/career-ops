@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# career-ops batch runner — standalone orchestrator for claude -p workers
-# Reads batch-input.tsv, delegates each offer to a claude -p worker,
+# career-ops batch runner — standalone orchestrator for backend-specific workers
+# Reads batch-input.tsv, delegates each offer to a configured backend worker,
 # tracks state in batch-state.tsv for resumability.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,11 +25,15 @@ DRY_RUN=false
 RETRY_FAILED=false
 START_FROM=0
 MAX_RETRIES=2
+BATCH_PROVIDER="${BATCH_PROVIDER:-claude}"
 
 usage() {
   cat <<'USAGE'
-career-ops batch runner — process job offers in batch via claude -p workers
-Uses your default Claude model (Claude Max subscription).
+career-ops batch runner — process job offers in batch via backend workers
+
+Supported backends:
+  - claude (implemented, uses claude -p)
+  - codex (reserved, not yet implemented)
 
 Usage: batch-runner.sh [OPTIONS]
 
@@ -39,6 +43,7 @@ Options:
   --retry-failed       Only retry offers marked as "failed" in state
   --start-from N       Start from offer ID N (skip earlier IDs)
   --max-retries N      Max retry attempts per offer (default: 2)
+  --provider NAME      Backend provider (default: $BATCH_PROVIDER)
   -h, --help           Show this help
 
 Files:
@@ -60,6 +65,9 @@ Examples:
 
   # Process 2 at a time starting from ID 10
   ./batch-runner.sh --parallel 2 --start-from 10
+
+  # Explicit backend selection
+  ./batch-runner.sh --provider claude
 USAGE
 }
 
@@ -71,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --retry-failed) RETRY_FAILED=true; shift ;;
     --start-from) START_FROM="$2"; shift 2 ;;
     --max-retries) MAX_RETRIES="$2"; shift 2 ;;
+    --provider) BATCH_PROVIDER="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -114,8 +123,26 @@ check_prerequisites() {
     exit 1
   fi
 
-  if ! command -v claude &>/dev/null; then
-    echo "ERROR: 'claude' CLI not found in PATH."
+  case "$BATCH_PROVIDER" in
+    claude)
+      if ! command -v claude &>/dev/null; then
+        echo "ERROR: 'claude' CLI not found in PATH."
+        exit 1
+      fi
+      ;;
+    codex)
+      echo "ERROR: batch backend 'codex' is not implemented yet."
+      echo "Use interactive Codex workflows for now, or run batch with --provider claude."
+      exit 1
+      ;;
+    *)
+      echo "ERROR: Unknown batch provider '$BATCH_PROVIDER'. Supported: claude, codex"
+      exit 1
+      ;;
+  esac
+
+  if ! command -v node &>/dev/null; then
+    echo "ERROR: 'node' not found in PATH."
     exit 1
   fi
 
@@ -306,13 +333,17 @@ process_offer() {
     -e "s|{{ID}}|${id}|g" \
     "$PROMPT_FILE" > "$resolved_prompt"
 
-  # Launch claude -p worker (uses default model from Claude Max subscription)
   local exit_code=0
-  claude -p \
-    --dangerously-skip-permissions \
-    --append-system-prompt-file "$resolved_prompt" \
-    "$prompt" \
-    > "$log_file" 2>&1 || exit_code=$?
+  if [[ "$BATCH_PROVIDER" == "claude" ]]; then
+    claude -p \
+      --dangerously-skip-permissions \
+      --append-system-prompt-file "$resolved_prompt" \
+      "$prompt" \
+      > "$log_file" 2>&1 || exit_code=$?
+  else
+    echo "Unsupported provider: $BATCH_PROVIDER" > "$log_file"
+    exit_code=1
+  fi
 
   # Cleanup resolved prompt
   rm -f "$resolved_prompt"
@@ -408,6 +439,7 @@ main() {
   fi
 
   echo "=== career-ops batch runner ==="
+  echo "Provider: $BATCH_PROVIDER"
   echo "Parallel: $PARALLEL | Max retries: $MAX_RETRIES"
   echo "Input: $total_input offers"
   echo ""

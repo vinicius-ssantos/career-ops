@@ -1,5 +1,15 @@
 # Career-Ops -- AI Job Search Pipeline
 
+## Multi-Platform Note
+
+This repository now exposes its neutral agent entrypoint in `AGENTS.md`.
+
+- `AGENTS.md` is the primary cross-platform guide for Codex and other coding agents
+- `CLAUDE.md` remains the Claude Code-specific guide
+- `.opencode/commands/*` remains the OpenCode integration surface
+
+The product logic should stay repository-native whenever possible.
+
 ## Origin
 
 This system was built and used by [santifer](https://santifer.io) to evaluate 740+ job offers, generate 100+ tailored CVs, and land a Head of Applied AI role. The archetypes, scoring logic, negotiation scripts, and proof point structure all reflect his specific career search in AI/automation roles.

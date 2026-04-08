@@ -49,6 +49,16 @@ The negotiation section provides frameworks for salary discussions. Replace the 
 - Geographic arbitrage strategy
 - Pushback responses
 
+## Agent Surfaces
+
+Career-ops supports multiple agent entrypoints:
+
+- Codex reads `AGENTS.md`
+- Claude Code reads `CLAUDE.md`
+- OpenCode uses `.opencode/commands/`
+
+Keep behavior changes in repository files (`modes/*`, scripts, templates), not only in a platform-specific prompt file.
+
 ## Hooks (Optional)
 
 Career-ops can integrate with external systems via Claude Code hooks. Example hooks:
@@ -66,7 +76,7 @@ Career-ops can integrate with external systems via Claude Code hooks. Example ho
 }
 ```
 
-Save hooks in `.claude/settings.json`.
+Save Claude-specific hooks in `.claude/settings.json`.
 
 ## States (templates/states.yml)
 

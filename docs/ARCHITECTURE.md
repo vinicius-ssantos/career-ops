@@ -2,6 +2,14 @@
 
 ## System Overview
 
+The repository is now designed as a multi-platform core:
+
+- Codex reads `AGENTS.md`
+- Claude Code reads `CLAUDE.md`
+- OpenCode uses `.opencode/commands/*`
+
+The workflows should prefer repository-native scripts and data contracts over platform-specific tools whenever possible.
+
 ```
                     ┌─────────────────────────────────┐
                     │         Claude Code Agent        │
@@ -37,7 +45,7 @@
 ## Evaluation Flow (Single Offer)
 
 1. **Input**: User pastes JD text or URL
-2. **Extract**: Playwright/WebFetch extracts JD from URL
+2. **Extract**: `extract-jd.mjs` or platform browser tools extract JD from URL
 3. **Classify**: Detect archetype (1 of 6 types)
 4. **Evaluate**: 6 blocks (A-F):
    - A: Role summary
@@ -56,14 +64,14 @@
 The batch system processes multiple offers in parallel:
 
 ```
-batch-input.tsv    →  batch-runner.sh  →  N × claude -p workers
+batch-input.tsv    →  batch-runner.sh  →  N × backend workers
 (id, url, source)     (orchestrator)       (self-contained prompt)
                            │
                     batch-state.tsv
                     (tracks progress)
 ```
 
-Each worker is a headless Claude instance (`claude -p`) that receives the full `batch-prompt.md` as context. Workers produce:
+The currently implemented batch backend is Claude (`claude -p`). The runner is now backend-aware so new providers can be added without rewriting orchestration. Workers produce:
 - Report .md
 - PDF
 - Tracker TSV line
@@ -77,6 +85,8 @@ cv.md                    →  Evaluation context
 article-digest.md        →  Proof points for matching
 config/profile.yml       →  Candidate identity
 portals.yml              →  Scanner configuration
+extract-jd.mjs           →  Local URL extraction
+scan-portals.mjs         →  Local tracked-company scan
 templates/states.yml     →  Canonical status values
 templates/cv-template.html → PDF generation template
 ```
