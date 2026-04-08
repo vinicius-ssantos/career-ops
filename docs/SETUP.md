@@ -57,12 +57,33 @@ Open your preferred agent in this directory:
 
 Then paste a job offer URL or description. Career-ops will evaluate it, generate a report, create a tailored PDF, and track it. For Codex, the repository-native entrypoint is `AGENTS.md`.
 
+## Recommended Discovery Flow
+
+In practice, the most reliable workflow is:
+
+1. Discover jobs on LinkedIn or another broad job board.
+2. Feed the interesting role into career-ops by URL or by saving the JD locally.
+3. Use career-ops for fit evaluation, CV tailoring, tracker updates, and application prep.
+
+If a LinkedIn URL is accessible directly:
+
+```bash
+npm run extract:jd -- "<job-url>" --out "jds/company-role.md"
+```
+
+If LinkedIn requires login or the page does not extract cleanly:
+
+1. Save the job description manually to `jds/company-role.md`
+2. Add it to `data/pipeline.md` as `local:jds/company-role.md | Company | Role`
+
+Treat `/career-ops scan` as a secondary source of discovery, not the primary one.
+
 ## Available Commands
 
 | Action | How |
 |--------|-----|
 | Evaluate an offer | Paste a URL or JD text |
-| Search for offers | `/career-ops scan` |
+| Search for offers | LinkedIn first, `/career-ops scan` second |
 | Process pending URLs | `/career-ops pipeline` |
 | Generate a PDF | `/career-ops pdf` |
 | Batch evaluate | `/career-ops batch` |

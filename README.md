@@ -48,6 +48,8 @@ Career-Ops turns any AI coding CLI into a full job search command center. Instea
 
 > **Important: This is NOT a spray-and-pray tool.** Career-ops is a filter -- it helps you find the few offers worth your time out of hundreds. The system strongly recommends against applying to anything scoring below 4.0/5. Your time is valuable, and so is the recruiter's. Always review before submitting.
 
+> **Operational recommendation:** use LinkedIn or another broad job board as your primary discovery surface, then feed the interesting URLs or saved JDs into career-ops. The built-in scanner is useful, but in day-to-day operation it works best as a secondary source.
+
 Career-ops is agentic: Codex, Claude Code, or OpenCode can drive the workflows, evaluate fit by reasoning about your CV vs the job description (not keyword matching), and adapt your resume per listing. The core logic lives in this repo; platform-specific integrations sit on top.
 
 > **Heads up: the first evaluations won't be great.** The system doesn't know you yet. Feed it context -- your CV, your career story, your proof points, your preferences, what you're good at, what you want to avoid. The more you nurture it, the better it gets. Think of it as onboarding a new recruiter: the first week they need to learn about you, then they become invaluable.
@@ -136,6 +138,26 @@ Career-ops is a single slash command with multiple modes:
 ```
 
 Or just paste a job URL or description directly -- career-ops auto-detects it and runs the full pipeline.
+
+## Recommended LinkedIn Workflow
+
+For many candidates, the most effective operational loop is:
+
+1. Discover jobs on LinkedIn.
+2. Feed the interesting role into career-ops.
+3. Let career-ops evaluate fit, tailor the CV, and prepare application answers.
+4. Submit manually after review.
+
+Use one of these ingestion paths:
+
+```bash
+# If the LinkedIn URL is directly extractable
+npm run extract:jd -- "<job-url>" --out "jds/company-role.md"
+
+# If LinkedIn blocks extraction, save the JD manually and process it as local input
+# Example pipeline entry:
+# - [ ] local:jds/company-role.md | Company | Role
+```
 
 ## How It Works
 

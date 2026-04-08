@@ -59,6 +59,20 @@ The workflows should prefer repository-native scripts and data contracts over pl
 7. **PDF**: Generate ATS-optimized CV (`generate-pdf.mjs`)
 8. **Track**: Write TSV to `batch/tracker-additions/`, auto-merged
 
+## Operational Discovery Flow
+
+The repository supports multiple discovery paths, but the recommended day-to-day flow is:
+
+1. Discover jobs externally, usually on LinkedIn.
+2. Ingest them into the repo by URL or by saving the JD under `jds/`.
+3. Process them through `pipeline.md`.
+
+This means discovery and evaluation are intentionally decoupled:
+- Discovery can come from LinkedIn, portal scan, referrals, or manual sourcing.
+- Processing stays inside the repo via `extract-jd.mjs`, `pipeline.md`, reports, PDFs, and tracker updates.
+
+When a URL is not directly extractable, `local:jds/...` is the canonical fallback input format.
+
 ## Batch Processing
 
 The batch system processes multiple offers in parallel:
