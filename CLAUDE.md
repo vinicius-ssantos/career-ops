@@ -51,6 +51,18 @@ Parse the JSON output:
 The user can also say "check for updates" or "update career-ops" at any time to force a check.
 To rollback: `node update-system.mjs rollback`
 
+## Git Workflow (MANDATORY)
+
+- Always follow gitflow-style branch discipline for repo-tracked changes.
+- Never implement directly on `main`.
+- Start from or create a working branch first:
+  - `feature/<topic>` for features
+  - `fix/<topic>` for fixes or cleanup
+- Commit on the working branch as the task progresses.
+- Only merge to `main` when the work is complete and the user explicitly wants consolidation.
+- If the user asks to publish, push the working branch as needed, then merge/push `main`.
+- If a newer working branch already contains older feature commits, merge the newest complete branch to `main` instead of replaying older branches separately.
+
 ## What is career-ops
 
 AI-powered job search automation built on Claude Code: pipeline tracking, offer evaluation, CV generation, portal scanning, batch processing.

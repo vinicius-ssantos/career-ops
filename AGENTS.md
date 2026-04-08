@@ -80,6 +80,18 @@ Current Codex defaults:
 
 ## Operational Rules
 
+### Git workflow
+
+- Always follow gitflow-style branch discipline for repo-tracked changes.
+- Never start implementation work directly on `main`.
+- Create or reuse a working branch first:
+  - `feature/<topic>` for new capabilities
+  - `fix/<topic>` for bug fixes or cleanup
+- Make commits on the working branch while the task is in progress.
+- Merge to `main` only after the branch work is complete and the user asks to consolidate it.
+- When the user asks to publish work, push the working branch first if needed, then merge/push `main`.
+- If the current branch already contains earlier feature work, prefer merging the newest branch that contains the full stack of intended commits instead of replaying partial branches one by one.
+
 ### Setup and health
 
 - Use `npm run doctor` to validate setup
