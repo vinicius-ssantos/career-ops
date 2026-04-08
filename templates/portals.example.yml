@@ -1,5 +1,12 @@
 # Portal Scanner Configuration
 # Used by /career-ops scan to discover new offers automatically.
+# Preferred priority:
+#   1. Structured boards/APIs -> Greenhouse, Lever, Ashby, Workable
+#   2. Generic careers_url scraping -> only for real careers pages
+#   3. WebSearch -> fallback only when structured discovery finds nothing
+#
+# Prefer board URLs or APIs in tracked_companies whenever possible.
+# Avoid generic news/portal homepages because they create false positives and weak discovery.
 #
 # Strategy (3 levels):
 #   1. Playwright → careers_url of each company (real-time, reliable)
@@ -98,6 +105,7 @@ title_filter:
     - "Director"
 
 # -- Search queries --
+# WebSearch is fallback-only. These queries run after structured sources return nothing.
 # Each query triggers a WebSearch. Use site: to filter by portal.
 # The scanner extracts title, URL, and company from results.
 

@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * scan-portals.mjs — local portal scanner
+ * scan-portals.mjs - local portal scanner
  *
  * Scope:
  * - Reads tracked companies and search queries from portals.yml
- * - Supports Greenhouse APIs directly
- * - Falls back to Playwright careers page extraction for tracked companies
- * - Supports broad discovery through simple web search over search_queries
+ * - Prioritizes structured job boards and APIs for tracked companies
+ * - Falls back to generic web search only when structured discovery finds nothing
  * - Writes new URLs to data/pipeline.md and data/scan-history.tsv
  */
 
@@ -193,6 +192,103 @@ function decodeDuckDuckGoHref(href) {
   }
 }
 
+function safeErrorMessage(err, max = 160) {
+  return String(err?.message || err || 'unknown error').replace(/\s+/g, ' ').slice(0, max);
+}
+
+function inferBoardType(careersUrl = '') {
+  try {
+    const parsed = new URL(careersUrl);
+    const host = parsed.hostname.replace(/^www\./, '');
+
+    if (
+      host === 'boards.greenhouse.io' ||
+      host === 'job-boards.greenhouse.io' ||
+      host === 'job-boards.eu.greenhouse.io'
+    ) {
+      return 'greenhouse';
+    }
+    if (host === 'jobs.lever.co') return 'lever';
+    if (host === 'jobs.ashbyhq.com') return 'ashby';
+    if (host === 'apply.workable.com') return 'workable';
+    return 'generic';
+  } catch {
+    return 'generic';
+  }
+}
+
+function getBoardSlug(careersUrl = '') {
+  try {
+    const parsed = new URL(careersUrl);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    return parts[0] || '';
+  } catch {
+    return '';
+  }
+}
+
+function deriveGreenhouseApiUrl(careersUrl = '') {
+  const slug = getBoardSlug(careersUrl);
+  return slug ? `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs` : '';
+}
+
+function deriveLeverApiUrl(careersUrl = '') {
+  const slug = getBoardSlug(careersUrl);
+  return slug ? `https://api.lever.co/v0/postings/${slug}?mode=json` : '';
+}
+
+function getCompanyDiscoveryMode(company) {
+  if (company.api) return 'greenhouse_api';
+
+  const boardType = inferBoardType(company.careers_url || '');
+  if (boardType === 'greenhouse') return 'greenhouse_board';
+  if (boardType === 'lever') return 'lever_board';
+  if (boardType === 'ashby') return 'ashby_board';
+  if (boardType === 'workable') return 'workable_board';
+  if (company.scan_method === 'websearch' && company.scan_query) return 'websearch_fallback';
+  if (company.careers_url) return 'generic_careers_page';
+  return 'unsupported';
+}
+
+function uniqueByUrl(items) {
+  const dedup = new Map();
+  for (const item of items) {
+    if (item?.url && !dedup.has(item.url)) {
+      dedup.set(item.url, item);
+    }
+  }
+  return Array.from(dedup.values());
+}
+
+function extractSearchResults(html, queryName) {
+  const patterns = [
+    /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]*href='([^']+)'[^>]*>([\s\S]*?)<\/a>/gi,
+  ];
+
+  const rawMatches = [];
+  for (const pattern of patterns) {
+    rawMatches.push(...html.matchAll(pattern));
+  }
+
+  return uniqueByUrl(rawMatches.map((match) => {
+    const href = decodeDuckDuckGoHref(match[1] || '');
+    const title = normalizeHtml(match[2] || '');
+    return {
+      company: inferCompanyFromUrl(href),
+      title,
+      url: href,
+      source: `query:${queryName}`,
+    };
+  }).filter((job) => {
+    if (!job.title || !job.url.startsWith('http')) return false;
+    if (/duckduckgo\.com|google\.com\/search|bing\.com\/search/i.test(job.url)) return false;
+    if (job.title.length < 8 || job.title.length > 200) return false;
+    return true;
+  }));
+}
+
 async function searchJobs(queryName, query) {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const response = await fetch(url, {
@@ -206,18 +302,7 @@ async function searchJobs(queryName, query) {
   }
 
   const html = await response.text();
-  const matches = [...html.matchAll(/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
-
-  return matches.slice(0, 10).map((match) => {
-    const href = decodeDuckDuckGoHref(match[1]);
-    const title = normalizeHtml(match[2]);
-    return {
-      company: inferCompanyFromUrl(href),
-      title,
-      url: href,
-      source: queryName,
-    };
-  }).filter((job) => job.title && job.url.startsWith('http'));
+  return extractSearchResults(html, queryName).slice(0, 20);
 }
 
 async function loadSeenUrls(projectRoot) {
@@ -239,9 +324,14 @@ async function loadSeenUrls(projectRoot) {
 }
 
 async function fetchGreenhouseJobs(company) {
-  const response = await fetch(company.api);
+  const apiUrl = company.api || deriveGreenhouseApiUrl(company.careers_url || '');
+  if (!apiUrl) {
+    throw new Error(`could not derive Greenhouse API URL for ${company.name}`);
+  }
+
+  const response = await fetch(apiUrl);
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from ${company.api}`);
+    throw new Error(`HTTP ${response.status} from ${apiUrl}`);
   }
 
   const payload = await response.json();
@@ -250,11 +340,37 @@ async function fetchGreenhouseJobs(company) {
     company: company.name,
     title: (job.title || '').trim(),
     url: job.absolute_url,
-    source: `tracked:${company.name}:greenhouse_api`,
+    source: `tracked:${company.name}:${company.api ? 'greenhouse_api' : 'greenhouse_board'}`,
   })).filter((job) => job.title && job.url);
 }
 
-async function scrapeCareersPage(browser, company) {
+async function fetchLeverJobs(company) {
+  const apiUrl = deriveLeverApiUrl(company.careers_url || '');
+  if (!apiUrl) {
+    throw new Error(`could not derive Lever API URL for ${company.name}`);
+  }
+
+  const response = await fetch(apiUrl, {
+    headers: {
+      'user-agent': 'Mozilla/5.0 career-ops scanner',
+      accept: 'application/json',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${apiUrl}`);
+  }
+
+  const payload = await response.json();
+  const jobs = Array.isArray(payload) ? payload : [];
+  return jobs.map((job) => ({
+    company: company.name,
+    title: (job.text || job.title || '').trim(),
+    url: job.hostedUrl || job.applyUrl || job.urls?.show || job.urls?.apply || '',
+    source: `tracked:${company.name}:lever_board`,
+  })).filter((job) => job.title && job.url);
+}
+
+async function scrapeCareersPage(browser, company, sourceKind = 'careers_page') {
   const page = await browser.newPage({
     viewport: { width: 1440, height: 1600 },
   });
@@ -263,22 +379,23 @@ async function scrapeCareersPage(browser, company) {
     await page.goto(company.careers_url, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForTimeout(2000);
 
-    const jobs = await page.evaluate((companyName) => {
-      const titleLike = /engineer|developer|software|backend|java|api|microservices|integration/i;
+    const jobs = await page.evaluate(({ companyName, sourceKind }) => {
+      const titleLike = /engineer|developer|software|backend|frontend|full.?stack|java|python|data|product|architect|manager|analyst|scientist|devops|sre|qa|ai|ml|platform|support|consultant|specialist|vaga|position|role|job|opportunity/i;
       const anchors = Array.from(document.querySelectorAll('a[href]'));
       const items = [];
 
       for (const anchor of anchors) {
         const text = (anchor.innerText || anchor.textContent || '').trim().replace(/\s+/g, ' ');
         const href = anchor.href;
-        if (!text || !href || text.length < 4) continue;
+        if (!text || !href || text.length < 4 || text.length > 180) continue;
         if (!titleLike.test(text)) continue;
-        if (/privacy|terms|cookies|benefits|linkedin|instagram|facebook/i.test(text)) continue;
+        if (/privacy|terms|cookies|benefits|linkedin|instagram|facebook|twitter|about|blog|press|faq|help|login|sign in|home/i.test(text)) continue;
+        if (/^(mailto:|javascript:|#)/i.test(href)) continue;
         items.push({
           company: companyName,
           title: text,
           url: href,
-          source: `tracked:${companyName}:careers_page`,
+          source: `tracked:${companyName}:${sourceKind}`,
         });
       }
 
@@ -287,12 +404,32 @@ async function scrapeCareersPage(browser, company) {
         if (!dedup.has(item.url)) dedup.set(item.url, item);
       }
       return Array.from(dedup.values());
-    }, company.name);
+    }, { companyName: company.name, sourceKind });
 
     return jobs;
   } finally {
     await page.close();
   }
+}
+
+function shouldRunFallbackSearch(structuredCompanies, structuredDiscovered) {
+  return structuredCompanies.length === 0 || structuredDiscovered === 0;
+}
+
+function buildFallbackQueries(companies, queries) {
+  const companyQueries = companies
+    .filter((company) => company.scan_method === 'websearch' && company.scan_query)
+    .map((company) => ({
+      name: `tracked:${company.name}:websearch`,
+      query: company.scan_query,
+    }));
+
+  const genericQueries = queries.map((query) => ({
+    name: query.name,
+    query: query.query,
+  }));
+
+  return [...companyQueries, ...genericQueries];
 }
 
 async function appendPipelineEntries(projectRoot, jobs) {
@@ -325,130 +462,141 @@ async function main() {
   const portals = parsePortalsYml(await readFile(portalsPath, 'utf8'));
   const companies = (portals.tracked_companies || []).filter((company) => company.enabled !== false);
   const queries = (portals.search_queries || []).filter((query) => query.enabled !== false);
+  const structuredCompanies = companies.filter((company) => {
+    const mode = getCompanyDiscoveryMode(company);
+    return mode !== 'websearch_fallback' && mode !== 'unsupported';
+  });
   const seen = await loadSeenUrls(projectRoot);
   let browser = null;
 
   let discovered = 0;
+  let structuredDiscovered = 0;
+  let fallbackDiscovered = 0;
   let relevant = 0;
   let duplicates = 0;
   let added = 0;
+  let fallbackQueriesExecuted = 0;
+
   const newJobs = [];
   const historyRows = [];
   const skippedTitles = [];
   const errors = [];
+  const addedBySource = new Map();
   const today = new Date().toISOString().slice(0, 10);
 
+  function bumpSource(source) {
+    addedBySource.set(source, (addedBySource.get(source) || 0) + 1);
+  }
+
+  function ingestJob(job, portalLabel) {
+    const sanity = passesJobSanityCheck(job);
+    if (!sanity.ok) {
+      skippedTitles.push(`${job.title} [${job.company}] <- ${portalLabel} (${sanity.reason})`);
+      historyRows.push([job.url, today, portalLabel, job.title, job.company, 'skipped_non_job'].join('\t'));
+      return;
+    }
+
+    const match = matchesTitleFilter(job.title, portals.title_filter);
+    if (!match.ok) {
+      skippedTitles.push(`${job.title} [${job.company}] <- ${portalLabel} (${match.reason})`);
+      historyRows.push([job.url, today, portalLabel, job.title, job.company, 'skipped_title'].join('\t'));
+      return;
+    }
+
+    relevant += 1;
+    if (seen.has(job.url)) {
+      duplicates += 1;
+      historyRows.push([job.url, today, portalLabel, job.title, job.company, 'skipped_dup'].join('\t'));
+      return;
+    }
+
+    seen.add(job.url);
+    newJobs.push(job);
+    historyRows.push([job.url, today, portalLabel, job.title, job.company, 'added'].join('\t'));
+    bumpSource(portalLabel);
+    added += 1;
+  }
+
   try {
-    const needsBrowser = companies.some((company) => !company.api && company.careers_url);
+    const needsBrowser = structuredCompanies.some((company) => {
+      const mode = getCompanyDiscoveryMode(company);
+      return mode === 'ashby_board' || mode === 'workable_board' || mode === 'generic_careers_page';
+    });
+
     if (needsBrowser) {
       try {
         browser = await chromium.launch({ headless: true });
       } catch (err) {
-        errors.push(`browser_launch -> ${String(err.message).replace(/\s+/g, ' ').slice(0, 160)}`);
+        errors.push(`browser_launch -> ${safeErrorMessage(err)}`);
       }
     }
 
-    for (const company of companies) {
+    for (const company of structuredCompanies) {
       let jobs = [];
+      const mode = getCompanyDiscoveryMode(company);
+      const portalLabel = `tracked:${company.name}:${mode}`;
+
       try {
-        if (company.api) {
+        if (mode === 'greenhouse_api' || mode === 'greenhouse_board') {
           jobs = await fetchGreenhouseJobs(company);
-        } else if (company.careers_url && browser) {
-          jobs = await scrapeCareersPage(browser, company);
-        } else if (company.careers_url) {
+        } else if (mode === 'lever_board') {
+          jobs = await fetchLeverJobs(company);
+        } else if ((mode === 'ashby_board' || mode === 'workable_board' || mode === 'generic_careers_page') && browser) {
+          const sourceKind = mode === 'generic_careers_page' ? 'careers_page' : mode;
+          jobs = await scrapeCareersPage(browser, company, sourceKind);
+        } else if (mode === 'ashby_board' || mode === 'workable_board' || mode === 'generic_careers_page') {
           throw new Error('browser unavailable for careers page scan');
+        } else {
+          throw new Error(`unsupported discovery mode: ${mode}`);
         }
       } catch (err) {
-        errors.push(`tracked:${company.name} -> ${String(err.message).replace(/\s+/g, ' ')}`);
+        errors.push(`${portalLabel} -> ${safeErrorMessage(err)}`);
         historyRows.push([
           company.careers_url || company.api || company.name,
           today,
-          `tracked:${company.name}`,
+          portalLabel,
           company.name,
           company.name,
-          `error:${String(err.message).replace(/\s+/g, ' ').slice(0, 80)}`,
+          `error:${safeErrorMessage(err, 80)}`,
         ].join('\t'));
         continue;
       }
 
       for (const job of jobs) {
         discovered += 1;
-        const sanity = passesJobSanityCheck(job);
-        if (!sanity.ok) {
-          skippedTitles.push(`${job.title} [${job.company}] <- ${job.source} (${sanity.reason})`);
-          historyRows.push([job.url, today, job.source, job.title, job.company, 'skipped_non_job'].join('\t'));
-          continue;
-        }
-
-        const match = matchesTitleFilter(job.title, portals.title_filter);
-
-        if (!match.ok) {
-          skippedTitles.push(`${job.title} [${job.company}] <- ${job.source} (${match.reason})`);
-          historyRows.push([job.url, today, job.source, job.title, job.company, 'skipped_title'].join('\t'));
-          continue;
-        }
-
-        relevant += 1;
-
-        if (seen.has(job.url)) {
-          duplicates += 1;
-          historyRows.push([job.url, today, job.source, job.title, job.company, 'skipped_dup'].join('\t'));
-          continue;
-        }
-
-        seen.add(job.url);
-        newJobs.push(job);
-        historyRows.push([job.url, today, job.source, job.title, job.company, 'added'].join('\t'));
-        added += 1;
+        structuredDiscovered += 1;
+        ingestJob(job, job.source || portalLabel);
       }
     }
 
-    for (const query of queries) {
-      let jobs = [];
-      try {
-        jobs = await searchJobs(query.name, query.query);
-      } catch (err) {
-        errors.push(`query:${query.name} -> ${String(err.message).replace(/\s+/g, ' ')}`);
-        historyRows.push([
-          `query:${query.name}`,
-          today,
-          query.name,
-          query.query,
-          '',
-          `error:${String(err.message).replace(/\s+/g, ' ').slice(0, 80)}`,
-        ].join('\t'));
-        continue;
-      }
+    if (shouldRunFallbackSearch(structuredCompanies, structuredDiscovered)) {
+      const fallbackQueries = buildFallbackQueries(companies, queries);
+      fallbackQueriesExecuted = fallbackQueries.length;
 
-      for (const job of jobs) {
-        discovered += 1;
-        const sanity = passesJobSanityCheck(job);
-        if (!sanity.ok) {
-          skippedTitles.push(`${job.title} [${job.company}] <- ${query.name} (${sanity.reason})`);
-          historyRows.push([job.url, today, query.name, job.title, job.company, 'skipped_non_job'].join('\t'));
+      for (const query of fallbackQueries) {
+        let jobs = [];
+        const portalLabel = `query:${query.name}`;
+
+        try {
+          jobs = await searchJobs(query.name, query.query);
+        } catch (err) {
+          errors.push(`${portalLabel} -> ${safeErrorMessage(err)}`);
+          historyRows.push([
+            portalLabel,
+            today,
+            portalLabel,
+            query.query,
+            '',
+            `error:${safeErrorMessage(err, 80)}`,
+          ].join('\t'));
           continue;
         }
 
-        const match = matchesTitleFilter(job.title, portals.title_filter);
-
-        if (!match.ok) {
-          skippedTitles.push(`${job.title} [${job.company}] <- ${query.name} (${match.reason})`);
-          historyRows.push([job.url, today, query.name, job.title, job.company, 'skipped_title'].join('\t'));
-          continue;
+        for (const job of jobs) {
+          discovered += 1;
+          fallbackDiscovered += 1;
+          ingestJob(job, portalLabel);
         }
-
-        relevant += 1;
-
-        if (seen.has(job.url)) {
-          duplicates += 1;
-          historyRows.push([job.url, today, query.name, job.title, job.company, 'skipped_dup'].join('\t'));
-          continue;
-        }
-
-        seen.add(job.url);
-        newJobs.push({ ...job, source: query.name });
-        historyRows.push([job.url, today, query.name, job.title, job.company, 'added'].join('\t'));
-        added += 1;
       }
     }
   } finally {
@@ -464,8 +612,10 @@ async function main() {
 
   console.log(`Portal Scan - ${today}`);
   console.log('------------------------------');
-  console.log(`Tracked companies scanned: ${companies.length}`);
-  console.log(`Search queries executed: ${queries.length}`);
+  console.log(`Tracked companies scanned: ${structuredCompanies.length}`);
+  console.log(`Structured jobs discovered: ${structuredDiscovered}`);
+  console.log(`Fallback queries executed: ${fallbackQueriesExecuted}`);
+  console.log(`Fallback jobs discovered: ${fallbackDiscovered}`);
   console.log(`Jobs discovered: ${discovered}`);
   console.log(`Relevant after title filter: ${relevant}`);
   console.log(`Duplicates skipped: ${duplicates}`);
@@ -481,7 +631,7 @@ async function main() {
 
   if (skippedTitles.length > 0) {
     console.log('');
-    console.log('Skipped by title filter:');
+    console.log('Skipped by filter:');
     for (const title of skippedTitles.slice(0, 15)) {
       console.log(`- ${title}`);
     }
@@ -494,9 +644,17 @@ async function main() {
       console.log(`+ ${job.company} | ${job.title} <- ${job.source}`);
     }
   }
+
+  if (addedBySource.size > 0) {
+    console.log('');
+    console.log('Added by source:');
+    for (const [source, count] of Array.from(addedBySource.entries()).sort((a, b) => b[1] - a[1])) {
+      console.log(`- ${source}: ${count}`);
+    }
+  }
 }
 
 main().catch((err) => {
-  console.error(`scan-portals.mjs failed: ${err.message}`);
+  console.error(`scan-portals.mjs failed: ${safeErrorMessage(err)}`);
   process.exit(1);
 });
